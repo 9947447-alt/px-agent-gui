@@ -85,6 +85,35 @@ fn is_once_option(option_id: &str) -> bool {
     option_id == "allow-once" || option_id == "reject-once"
 }
 
+/// Grok ACP may list session/always options; emit only allow-once / reject-once.
+fn grok_permission_options_for_emit(params: &Value) -> Vec<PermissionOptionPayload> {
+    let mut options = vec![];
+    if let Some(opts) = params.get("options").and_then(|o| o.as_array()) {
+        for opt in opts {
+            if let Some(opt_id) = opt.get("optionId").and_then(|s| s.as_str()) {
+                if !is_once_option(opt_id) {
+                    continue;
+                }
+                let name = opt
+                    .get("name")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or(opt_id)
+                    .to_string();
+                let kind = opt
+                    .get("kind")
+                    .and_then(|s| s.as_str())
+                    .map(|s| s.to_string());
+                options.push(PermissionOptionPayload {
+                    option_id: opt_id.to_string(),
+                    name,
+                    kind,
+                });
+            }
+        }
+    }
+    options
+}
+
 fn home_dir() -> Result<PathBuf, String> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -469,30 +498,6 @@ pub async fn start_task(
                                 .and_then(|c| c.as_str())
                                 .map(|s| s.to_string());
 
-                            let mut options = vec![];
-                            if let Some(opts) = params.get("options").and_then(|o| o.as_array()) {
-                                for opt in opts {
-                                    if let Some(opt_id) =
-                                        opt.get("optionId").and_then(|s| s.as_str())
-                                    {
-                                        let name = opt
-                                            .get("name")
-                                            .and_then(|s| s.as_str())
-                                            .unwrap_or(opt_id)
-                                            .to_string();
-                                        let kind = opt
-                                            .get("kind")
-                                            .and_then(|s| s.as_str())
-                                            .map(|s| s.to_string());
-                                        options.push(PermissionOptionPayload {
-                                            option_id: opt_id.to_string(),
-                                            name,
-                                            kind,
-                                        });
-                                    }
-                                }
-                            }
-
                             let _ = app_clone.emit(
                                 "permission_request",
                                 PermissionRequestPayload {
@@ -501,7 +506,7 @@ pub async fn start_task(
                                     tool_name,
                                     title: tool_title,
                                     command: raw_cmd,
-                                    options,
+                                    options: grok_permission_options_for_emit(&params),
                                     already_denied: false,
                                 },
                             );
@@ -756,6 +761,42 @@ mod tests {
         assert!(perm.already_denied);
         assert_eq!(perm.options[0].option_id, "dismiss");
         assert!(!perm.options.iter().any(|o| o.option_id == "allow-once"));
+    }
+
+    #[test]
+    fn grok_permission_emit_keeps_only_once_options() {
+        let params = json!({
+            "options": [
+                {
+                    "optionId": "allow-edits-session",
+                    "name": "Allow all edits this session",
+                    "kind": "allow_always"
+                },
+                {
+                    "optionId": "allow-once",
+                    "name": "Allow once",
+                    "kind": "allow_once"
+                },
+                {
+                    "optionId": "allow_always",
+                    "name": "Always allow",
+                    "kind": "allow_always"
+                },
+                {
+                    "optionId": "reject-once",
+                    "name": "Reject",
+                    "kind": "reject_once"
+                }
+            ]
+        });
+        let options = grok_permission_options_for_emit(&params);
+        let ids: Vec<&str> = options.iter().map(|o| o.option_id.as_str()).collect();
+        assert_eq!(ids, vec!["allow-once", "reject-once"]);
+        assert!(!options.iter().any(|o| is_session_wide_allow(&o.option_id)));
+        assert!(!options.iter().any(|o| {
+            let id = o.option_id.to_ascii_lowercase();
+            id.contains("session") || id.contains("always")
+        }));
     }
 
     #[test]
