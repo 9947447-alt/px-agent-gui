@@ -10,6 +10,10 @@
     "allow-respond-permission",
     "allow-stop-session",
     "allow-open-desktop-app",
+    "allow-load-local-store",
+    "allow-save-local-store",
+    "allow-create-local-project",
+    "allow-create-local-session",
     "dialog:allow-open"
   ]
 }

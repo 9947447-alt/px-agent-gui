@@ -11,3 +11,6 @@ src-tauri/target
 
 # Logs
 *.log
+
+# Local project/session store lives in app data; ignore if copied into the repo
+projects-sessions.json

@@ -61,3 +61,31 @@ export interface MessageItem {
   createdAt: number;
 }
 
+export interface LocalProject {
+  id: string;
+  name: string;
+  workspacePath: string;
+  createdAt: number;
+}
+
+export interface LocalSession {
+  id: string;
+  projectId: string;
+  title: string;
+  titleCustom: boolean;
+  backend: BackendType;
+  model: string;
+  reasoningEffort: string;
+  messages: MessageItem[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface LocalStore {
+  version: number;
+  projects: LocalProject[];
+  sessions: LocalSession[];
+  activeProjectId: string | null;
+  activeSessionId: string | null;
+}
+

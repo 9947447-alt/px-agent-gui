@@ -19,8 +19,19 @@ import {
   AlertTriangle,
   Sliders
 } from 'lucide-react';
-import { BackendType, SystemStatus, PermissionRequest, MessageItem } from './types';
+import { BackendType, SystemStatus, PermissionRequest, MessageItem, LocalStore, LocalSession } from './types';
+import { Sidebar } from './Sidebar';
 import logoApp from '../design/logo-app-1024.png';
+
+function emptyStore(): LocalStore {
+  return {
+    version: 1,
+    projects: [],
+    sessions: [],
+    activeProjectId: null,
+    activeSessionId: null,
+  };
+}
 
 function permissionCanAllowOnce(req: PermissionRequest): boolean {
   if (req.alreadyDenied) return false;
@@ -45,8 +56,15 @@ export default function App() {
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
   const [launchHint, setLaunchHint] = useState<string | null>(null);
+  const [store, setStore] = useState<LocalStore>(emptyStore());
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const storeRef = useRef(store);
+  const messagesRef = useRef(messages);
+  const currentResponseRef = useRef(currentResponse);
+  const currentThoughtsRef = useRef(currentThoughts);
+  const isRunningRef = useRef(isRunning);
+  const runLocalSessionIdRef = useRef<string | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -55,6 +73,103 @@ export default function App() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, currentResponse, currentThoughts, pendingPermission]);
+
+  useEffect(() => {
+    storeRef.current = store;
+  }, [store]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+  useEffect(() => {
+    currentResponseRef.current = currentResponse;
+  }, [currentResponse]);
+  useEffect(() => {
+    currentThoughtsRef.current = currentThoughts;
+  }, [currentThoughts]);
+  useEffect(() => {
+    isRunningRef.current = isRunning;
+  }, [isRunning]);
+
+  const persistStore = async (next: LocalStore): Promise<LocalStore> => {
+    const saved = await invoke<LocalStore>('save_local_store', { store: next });
+    storeRef.current = saved;
+    setStore(saved);
+    return saved;
+  };
+
+  const patchSession = async (
+    sessionId: string,
+    patch: Partial<LocalSession>
+  ): Promise<LocalStore> => {
+    const current = storeRef.current;
+    const now = Date.now();
+    const next: LocalStore = {
+      ...current,
+      sessions: current.sessions.map((s) =>
+        s.id === sessionId ? { ...s, ...patch, updatedAt: now } : s
+      ),
+    };
+    return persistStore(next);
+  };
+
+  const applySessionToUi = (session: LocalSession | undefined, workspacePath: string) => {
+    setWorkspace(workspacePath);
+    setCurrentResponse('');
+    setCurrentThoughts('');
+    setPendingPermission(null);
+    if (session) {
+      messagesRef.current = session.messages;
+      setMessages(session.messages);
+      setSelectedBackend(session.backend);
+      if (session.model) setSelectedModel(session.model);
+      if (session.reasoningEffort) setSelectedReasoningEffort(session.reasoningEffort);
+    } else {
+      messagesRef.current = [];
+      setMessages([]);
+    }
+  };
+
+  const persistPartialRun = async () => {
+    const runningId = runLocalSessionIdRef.current;
+    const streamed = currentResponseRef.current;
+    const thoughts = currentThoughtsRef.current;
+    runLocalSessionIdRef.current = null;
+    setIsRunning(false);
+    setPendingPermission(null);
+    if (!runningId || !streamed) {
+      setCurrentResponse('');
+      setCurrentThoughts('');
+      return;
+    }
+    const assistant: MessageItem = {
+      id: String(Date.now()),
+      role: 'assistant',
+      content: streamed,
+      thoughts: thoughts || undefined,
+      createdAt: Date.now(),
+    };
+    const base =
+      storeRef.current.sessions.find((s) => s.id === runningId)?.messages ?? messagesRef.current;
+    const nextMessages = [...base, assistant];
+    await patchSession(runningId, { messages: nextMessages });
+    if (storeRef.current.activeSessionId === runningId) {
+      messagesRef.current = nextMessages;
+      setMessages(nextMessages);
+    }
+    setCurrentResponse('');
+    setCurrentThoughts('');
+  };
+
+  const stopIfRunning = async () => {
+    try {
+      await invoke('stop_session');
+    } catch {
+      // no active CLI session
+    }
+    if (isRunningRef.current || runLocalSessionIdRef.current) {
+      await persistPartialRun();
+    }
+  };
 
   // Probe CLI status on mount
   const checkStatus = async () => {
@@ -71,6 +186,22 @@ export default function App() {
 
   useEffect(() => {
     checkStatus();
+  }, []);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const loaded = await invoke<LocalStore>('load_local_store');
+        storeRef.current = loaded;
+        setStore(loaded);
+        const project = loaded.projects.find((p) => p.id === loaded.activeProjectId);
+        const session = loaded.sessions.find((s) => s.id === loaded.activeSessionId);
+        applySessionToUi(session, project?.workspacePath ?? '');
+      } catch (err) {
+        console.error('Failed to load local store:', err);
+      }
+    };
+    void load();
   }, []);
 
   // Sync model & reasoning effort whenever status or backend changes
@@ -138,18 +269,29 @@ export default function App() {
       unlistenSessionEnd = await listen<{ sessionId: string; status: string; fullResponse?: string }>(
         'session_end',
         (event) => {
+          const localId = runLocalSessionIdRef.current;
+          runLocalSessionIdRef.current = null;
           setIsRunning(false);
-          const finalResp = event.payload.fullResponse;
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: String(Date.now()),
-              role: 'assistant',
-              content: finalResp || currentResponse,
-              thoughts: currentThoughts || undefined,
-              createdAt: Date.now(),
-            },
-          ]);
+          const finalResp = event.payload.fullResponse || currentResponseRef.current;
+          const thoughts = currentThoughtsRef.current || undefined;
+          const assistant: MessageItem = {
+            id: String(Date.now()),
+            role: 'assistant',
+            content: finalResp,
+            thoughts,
+            createdAt: Date.now(),
+          };
+          if (localId) {
+            const base =
+              storeRef.current.sessions.find((s) => s.id === localId)?.messages ??
+              messagesRef.current;
+            const nextMessages = [...base, assistant];
+            void patchSession(localId, { messages: nextMessages });
+            if (storeRef.current.activeSessionId === localId) {
+              messagesRef.current = nextMessages;
+              setMessages(nextMessages);
+            }
+          }
           setCurrentResponse('');
           setCurrentThoughts('');
           setPendingPermission(null);
@@ -164,7 +306,7 @@ export default function App() {
       unlistenPermissions?.();
       unlistenSessionEnd?.();
     };
-  }, [currentResponse, currentThoughts]);
+  }, []);
 
   // Copy helper
   const copyToClipboard = (text: string) => {
@@ -173,33 +315,139 @@ export default function App() {
     setTimeout(() => setCopiedCmd(null), 2000);
   };
 
-  // Switch backend (resets active session)
+  // Switch backend (resets active CLI session; keeps the local chat)
   const handleBackendChange = async (newBackend: BackendType) => {
     if (newBackend === selectedBackend) return;
-    if (isRunning) {
-      await invoke('stop_session');
-      setIsRunning(false);
-    }
+    await stopIfRunning();
     setSelectedBackend(newBackend);
     setCurrentResponse('');
     setCurrentThoughts('');
     setPendingPermission(null);
+    const sid = storeRef.current.activeSessionId;
+    if (sid) {
+      void patchSession(sid, { backend: newBackend });
+    }
   };
 
-  const handlePickWorkspace = async () => {
+  const pickDirectory = async (defaultPath?: string): Promise<string | null> => {
     try {
       const selected = await open({
         directory: true,
         multiple: false,
-        title: '选择工作区',
-        defaultPath: workspace.trim() ? workspace : undefined,
+        title: '选择项目文件夹',
+        defaultPath: defaultPath || (workspace.trim() ? workspace : undefined),
       });
       if (typeof selected === 'string' && selected.trim()) {
-        setWorkspace(selected);
+        return selected;
       }
     } catch (err: unknown) {
       setLaunchHint(err instanceof Error ? err.message : String(err));
     }
+    return null;
+  };
+
+  const handlePickWorkspace = async () => {
+    const selected = await pickDirectory(workspace.trim() ? workspace : undefined);
+    if (!selected) return;
+    setWorkspace(selected);
+    const current = storeRef.current;
+    if (current.activeProjectId) {
+      const next: LocalStore = {
+        ...current,
+        projects: current.projects.map((p) =>
+          p.id === current.activeProjectId ? { ...p, workspacePath: selected } : p
+        ),
+      };
+      try {
+        await persistStore(next);
+      } catch (err: unknown) {
+        setLaunchHint(err instanceof Error ? err.message : String(err));
+      }
+    }
+  };
+
+  const handleNewProject = async (name: string, workspacePath: string) => {
+    await stopIfRunning();
+    const next = await invoke<LocalStore>('create_local_project', {
+      name,
+      workspace: workspacePath,
+    });
+    storeRef.current = next;
+    setStore(next);
+    applySessionToUi(undefined, workspacePath);
+  };
+
+  const handleNewSession = async () => {
+    if (!storeRef.current.activeProjectId) return;
+    await stopIfRunning();
+    const next = await invoke<LocalStore>('create_local_session', {
+      projectId: storeRef.current.activeProjectId,
+      backend: selectedBackend,
+      model: selectedModel,
+      reasoningEffort: selectedReasoningEffort,
+    });
+    storeRef.current = next;
+    setStore(next);
+    const session = next.sessions.find((s) => s.id === next.activeSessionId);
+    const project = next.projects.find((p) => p.id === next.activeProjectId);
+    applySessionToUi(session, project?.workspacePath ?? '');
+  };
+
+  const handleSelectProject = async (projectId: string) => {
+    await stopIfRunning();
+    const current = storeRef.current;
+    const project = current.projects.find((p) => p.id === projectId);
+    if (!project) return;
+    const sessions = current.sessions
+      .filter((s) => s.projectId === projectId)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    const keep =
+      current.activeSessionId && sessions.some((s) => s.id === current.activeSessionId)
+        ? current.activeSessionId
+        : sessions[0]?.id ?? null;
+    const next: LocalStore = {
+      ...current,
+      activeProjectId: projectId,
+      activeSessionId: keep,
+    };
+    await persistStore(next);
+    applySessionToUi(
+      sessions.find((s) => s.id === keep),
+      project.workspacePath
+    );
+  };
+
+  const handleSelectSession = async (sessionId: string) => {
+    if (sessionId === storeRef.current.activeSessionId && !isRunningRef.current) return;
+    await stopIfRunning();
+    const current = storeRef.current;
+    const session = current.sessions.find((s) => s.id === sessionId);
+    if (!session) return;
+    const project = current.projects.find((p) => p.id === session.projectId);
+    if (!project) return;
+    const next: LocalStore = {
+      ...current,
+      activeProjectId: session.projectId,
+      activeSessionId: sessionId,
+    };
+    await persistStore(next);
+    applySessionToUi(session, project.workspacePath);
+  };
+
+  const handleRenameSession = async (sessionId: string, title: string) => {
+    const current = storeRef.current;
+    const next: LocalStore = {
+      ...current,
+      sessions: current.sessions.map((s) =>
+        s.id === sessionId ? { ...s, title, titleCustom: true } : s
+      ),
+    };
+    await persistStore(next);
+  };
+
+  const persistSessionSettings = (patch: Partial<LocalSession>) => {
+    const sid = storeRef.current.activeSessionId;
+    if (sid) void patchSession(sid, patch);
   };
 
   // Send a task
@@ -212,18 +460,47 @@ export default function App() {
       return;
     }
 
-    if (!workspace.trim()) {
+    if (!storeRef.current.activeProjectId || !workspace.trim()) {
       setMessages((prev) => [
         ...prev,
         {
           id: String(Date.now()),
           role: 'system',
-          content: '[启动失败] 请先选择工作区',
+          content: '[启动失败] 请先选择项目和工作区',
           createdAt: Date.now(),
         },
       ]);
       return;
     }
+
+    let local = storeRef.current;
+    let localSessionId = local.activeSessionId;
+    const activeSession = local.sessions.find((s) => s.id === localSessionId);
+    if (!localSessionId || activeSession?.projectId !== local.activeProjectId) {
+      try {
+        local = await invoke<LocalStore>('create_local_session', {
+          projectId: local.activeProjectId,
+          backend: selectedBackend,
+          model: selectedModel,
+          reasoningEffort: selectedReasoningEffort,
+        });
+        storeRef.current = local;
+        setStore(local);
+        localSessionId = local.activeSessionId;
+      } catch (err: unknown) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: String(Date.now()),
+            role: 'system',
+            content: `[启动失败] ${err instanceof Error ? err.message : String(err)}`,
+            createdAt: Date.now(),
+          },
+        ]);
+        return;
+      }
+    }
+    if (!localSessionId) return;
 
     const userPrompt = prompt.trim();
     setPrompt('');
@@ -232,15 +509,22 @@ export default function App() {
     setCurrentThoughts('');
     setPendingPermission(null);
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: String(Date.now()),
-        role: 'user',
-        content: userPrompt,
-        createdAt: Date.now(),
-      },
-    ]);
+    const userMsg: MessageItem = {
+      id: String(Date.now()),
+      role: 'user',
+      content: userPrompt,
+      createdAt: Date.now(),
+    };
+    const nextMessages = [...messagesRef.current, userMsg];
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
+    runLocalSessionIdRef.current = localSessionId;
+    await patchSession(localSessionId, {
+      messages: nextMessages,
+      backend: selectedBackend,
+      model: selectedModel,
+      reasoningEffort: selectedReasoningEffort,
+    });
 
     try {
       const sessId = await invoke<string>('start_task', {
@@ -252,16 +536,18 @@ export default function App() {
       });
       console.log("Session started:", sessId);
     } catch (err: any) {
+      runLocalSessionIdRef.current = null;
       setIsRunning(false);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: String(Date.now()),
-          role: 'system',
-          content: `[启动失败] ${err?.message || String(err)}`,
-          createdAt: Date.now(),
-        },
-      ]);
+      const failMsg: MessageItem = {
+        id: String(Date.now()),
+        role: 'system',
+        content: `[启动失败] ${err?.message || String(err)}`,
+        createdAt: Date.now(),
+      };
+      const failedMessages = [...messagesRef.current, failMsg];
+      messagesRef.current = failedMessages;
+      setMessages(failedMessages);
+      void patchSession(localSessionId, { messages: failedMessages });
     }
   };
 
@@ -272,8 +558,7 @@ export default function App() {
     } catch (err) {
       console.error('Stop error:', err);
     }
-    setIsRunning(false);
-    setPendingPermission(null);
+    await persistPartialRun();
   };
 
   // Respond to permission request
@@ -327,9 +612,23 @@ export default function App() {
 
   const activeCli = systemStatus?.[selectedBackend];
   const isBackendReady = activeCli?.installed && activeCli?.loggedIn;
+  const activeProject = store.projects.find((p) => p.id === store.activeProjectId);
+  const canSend = Boolean(store.activeProjectId && workspace.trim());
 
   return (
-    <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100 select-none overflow-hidden font-sans">
+    <div className="flex h-screen bg-neutral-950 text-neutral-100 select-none overflow-hidden font-sans">
+      <Sidebar
+        store={store}
+        disabled={false}
+        onNewProject={handleNewProject}
+        onNewSession={() => void handleNewSession()}
+        onSelectProject={(id) => void handleSelectProject(id)}
+        onSelectSession={(id) => void handleSelectSession(id)}
+        onRenameSession={(id, title) => void handleRenameSession(id, title)}
+        onPickDirectory={pickDirectory}
+      />
+
+      <div className="flex flex-col flex-1 min-w-0">
       {/* 1. Top Header 标题栏 */}
       <header className="h-14 border-b border-neutral-800/80 bg-neutral-900/70 backdrop-blur px-4 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
@@ -491,7 +790,11 @@ export default function App() {
             {activeCli?.supportsModel && activeCli.models.length > 0 ? (
               <select
                 value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setSelectedModel(value);
+                  persistSessionSettings({ model: value });
+                }}
                 disabled={isRunning}
                 className="bg-neutral-950 border border-neutral-800 rounded px-2.5 py-1 text-neutral-200 text-xs font-mono focus:outline-none focus:border-blue-500 transition disabled:opacity-50 cursor-pointer"
               >
@@ -518,7 +821,11 @@ export default function App() {
               <span className="text-neutral-400 font-medium">推理强度:</span>
               <select
                 value={selectedReasoningEffort}
-                onChange={(e) => setSelectedReasoningEffort(e.target.value)}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setSelectedReasoningEffort(value);
+                  persistSessionSettings({ reasoningEffort: value });
+                }}
                 disabled={isRunning}
                 className="bg-neutral-950 border border-neutral-800 rounded px-2.5 py-1 text-neutral-200 text-xs font-mono focus:outline-none focus:border-blue-500 transition disabled:opacity-50 cursor-pointer"
               >
@@ -611,7 +918,9 @@ export default function App() {
             />
             <p className="text-sm text-neutral-300 font-medium">PX Agent GUI</p>
             <p className="text-xs text-neutral-500 mt-1.5 max-w-sm leading-relaxed">
-              {workspace
+              {!store.activeProjectId
+                ? '请先在左侧新建项目（名称 + 本机文件夹），再发送任务'
+                : workspace
                 ? '工作区已就绪，输入任务开始会话'
                 : '请先选择工作区文件夹，再发送任务或打开 KayG / Antigravity'}
             </p>
@@ -767,6 +1076,8 @@ export default function App() {
               placeholder={
                 !isBackendReady
                   ? '请先根据上方指引登录并就绪官方 CLI...'
+                  : !store.activeProjectId
+                  ? '请先新建或选择项目...'
                   : !workspace.trim()
                   ? '请先选择工作区文件夹...'
                   : `输入任务发给 ${selectedBackend === 'grok' ? 'Grok' : 'Antigravity'}... (Enter 发送, Shift+Enter 换行)`
@@ -786,7 +1097,7 @@ export default function App() {
           ) : (
             <button
               onClick={handleSend}
-              disabled={!prompt.trim() || !isBackendReady || !workspace.trim()}
+              disabled={!prompt.trim() || !isBackendReady || !canSend}
               className="h-11 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-800 disabled:text-neutral-500 text-white text-xs font-semibold flex items-center gap-1.5 transition shadow-sm disabled:cursor-not-allowed shrink-0"
             >
               <Send className="w-3.5 h-3.5" />
@@ -794,7 +1105,14 @@ export default function App() {
             </button>
           )}
         </div>
+        <div className="max-w-5xl mx-auto mt-2 flex items-center gap-4 text-[11px] text-neutral-500 min-w-0">
+          <span className="shrink-0">项目: {activeProject?.name || '未选择'}</span>
+          <span className="truncate font-mono" title={workspace || undefined}>
+            本地: {workspace || '未选择'}
+          </span>
+        </div>
       </footer>
+      </div>
     </div>
   );
 }

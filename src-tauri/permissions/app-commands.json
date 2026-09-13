@@ -6,7 +6,11 @@
       "allow-start-task",
       "allow-respond-permission",
       "allow-stop-session",
-      "allow-open-desktop-app"
+      "allow-open-desktop-app",
+      "allow-load-local-store",
+      "allow-save-local-store",
+      "allow-create-local-project",
+      "allow-create-local-session"
     ]
   },
   "permission": [
@@ -34,6 +38,26 @@
       "identifier": "allow-open-desktop-app",
       "description": "Allows opening an already-installed KayG or Antigravity desktop app via macOS open",
       "commands": { "allow": ["open_desktop_app"] }
+    },
+    {
+      "identifier": "allow-load-local-store",
+      "description": "Allows reading the local projects-sessions JSON from app data",
+      "commands": { "allow": ["load_local_store"] }
+    },
+    {
+      "identifier": "allow-save-local-store",
+      "description": "Allows writing the local projects-sessions JSON to app data",
+      "commands": { "allow": ["save_local_store"] }
+    },
+    {
+      "identifier": "allow-create-local-project",
+      "description": "Allows creating a local project bound to an existing workspace directory",
+      "commands": { "allow": ["create_local_project"] }
+    },
+    {
+      "identifier": "allow-create-local-session",
+      "description": "Allows creating a chat session bound to a local project",
+      "commands": { "allow": ["create_local_session"] }
     }
   ]
 }

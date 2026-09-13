@@ -1,10 +1,18 @@
 pub mod detector;
 pub mod session;
+pub mod store;
 
 use detector::{open_desktop_app as handle_open_desktop_app, probe_all, SystemStatus};
 use serde_json::Value;
-use session::{respond_permission as handle_permission, start_task as handle_start_task, stop_active_session, SessionState};
-use tauri::{AppHandle, State};
+use session::{
+    respond_permission as handle_permission, start_task as handle_start_task, stop_active_session,
+    SessionState,
+};
+use store::{
+    create_project, create_session, load_store, now_ms, save_store, store_file_path, LocalStore,
+};
+use tauri::{AppHandle, Manager, State};
+use uuid::Uuid;
 
 #[tauri::command]
 async fn probe_status() -> Result<SystemStatus, String> {
@@ -44,6 +52,67 @@ async fn stop_session(state: State<'_, SessionState>) -> Result<(), String> {
     Ok(())
 }
 
+fn local_store_file(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("无法解析应用数据目录: {}", e))?;
+    Ok(store_file_path(&dir))
+}
+
+#[tauri::command]
+fn load_local_store(app: AppHandle) -> Result<LocalStore, String> {
+    load_store(&local_store_file(&app)?)
+}
+
+#[tauri::command]
+fn save_local_store(app: AppHandle, mut store: LocalStore) -> Result<LocalStore, String> {
+    save_store(&local_store_file(&app)?, &mut store)?;
+    Ok(store)
+}
+
+#[tauri::command]
+fn create_local_project(
+    app: AppHandle,
+    name: String,
+    workspace: String,
+) -> Result<LocalStore, String> {
+    let path = local_store_file(&app)?;
+    let mut store = load_store(&path)?;
+    create_project(
+        &mut store,
+        &name,
+        &workspace,
+        now_ms(),
+        Uuid::new_v4().to_string(),
+    )?;
+    save_store(&path, &mut store)?;
+    Ok(store)
+}
+
+#[tauri::command]
+fn create_local_session(
+    app: AppHandle,
+    project_id: String,
+    backend: String,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+) -> Result<LocalStore, String> {
+    let path = local_store_file(&app)?;
+    let mut store = load_store(&path)?;
+    create_session(
+        &mut store,
+        &project_id,
+        &backend,
+        model.as_deref().unwrap_or(""),
+        reasoning_effort.as_deref().unwrap_or(""),
+        now_ms(),
+        Uuid::new_v4().to_string(),
+    )?;
+    save_store(&path, &mut store)?;
+    Ok(store)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -54,6 +123,10 @@ pub fn run() {
             respond_permission,
             stop_session,
             open_desktop_app,
+            load_local_store,
+            save_local_store,
+            create_local_project,
+            create_local_session,
         ])
         .run(tauri::generate_context!())
         .expect("运行 Tauri 应用程序时发生错误");

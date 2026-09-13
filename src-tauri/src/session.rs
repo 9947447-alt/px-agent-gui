@@ -306,7 +306,7 @@ pub fn build_agy_args(model: Option<&str>, reasoning_effort: Option<&str>) -> Ve
     args
 }
 
-fn resolve_workspace_dir(workspace: &str) -> Result<PathBuf, String> {
+pub fn resolve_workspace_dir(workspace: &str) -> Result<PathBuf, String> {
     let trimmed = workspace.trim();
     if trimmed.is_empty() {
         return Err("请先选择工作区".to_string());
