@@ -1,0 +1,13 @@
+# Dependencies
+node_modules
+dist
+.pnpm-store
+
+# Tauri & Rust
+src-tauri/target
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
