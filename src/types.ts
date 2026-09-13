@@ -11,9 +11,20 @@ export interface CliStatus {
   error?: string;
 }
 
+export interface DesktopAppStatus {
+  id: string;
+  name: string;
+  purpose: string;
+  installed: boolean;
+  path: string | null;
+  installHint: string;
+}
+
 export interface SystemStatus {
   grok: CliStatus;
   agy: CliStatus;
+  kayg: DesktopAppStatus;
+  antigravity: DesktopAppStatus;
 }
 
 export interface PermissionOption {
@@ -29,6 +40,7 @@ export interface PermissionRequest {
   title: string;
   command?: string;
   options: PermissionOption[];
+  alreadyDenied?: boolean;
 }
 
 export interface MessageItem {

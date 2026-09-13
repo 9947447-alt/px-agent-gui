@@ -1,7 +1,7 @@
 pub mod detector;
 pub mod session;
 
-use detector::{probe_all, SystemStatus};
+use detector::{open_desktop_app as handle_open_desktop_app, probe_all, SystemStatus};
 use serde_json::Value;
 use session::{respond_permission as handle_permission, start_task as handle_start_task, stop_active_session, SessionState};
 use tauri::{AppHandle, State};
@@ -9,6 +9,11 @@ use tauri::{AppHandle, State};
 #[tauri::command]
 async fn probe_status() -> Result<SystemStatus, String> {
     Ok(probe_all().await)
+}
+
+#[tauri::command]
+fn open_desktop_app(app_id: String, workspace: String) -> Result<String, String> {
+    handle_open_desktop_app(&app_id, &workspace)
 }
 
 #[tauri::command]
@@ -45,6 +50,7 @@ pub fn run() {
             start_task,
             respond_permission,
             stop_session,
+            open_desktop_app,
         ])
         .run(tauri::generate_context!())
         .expect("运行 Tauri 应用程序时发生错误");

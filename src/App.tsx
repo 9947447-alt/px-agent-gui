@@ -19,6 +19,13 @@ import {
 } from 'lucide-react';
 import { BackendType, SystemStatus, PermissionRequest, MessageItem } from './types';
 
+function permissionCanAllowOnce(req: PermissionRequest): boolean {
+  if (req.alreadyDenied) return false;
+  return (req.options ?? []).some(
+    (o) => o.kind === 'allow_once' || o.optionId === 'allow-once'
+  );
+}
+
 export default function App() {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
@@ -32,6 +39,7 @@ export default function App() {
   const [showThoughts, setShowThoughts] = useState(true);
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
+  const [launchHint, setLaunchHint] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -213,6 +221,12 @@ export default function App() {
   const handlePermissionDecision = async (allow: boolean) => {
     if (!pendingPermission) return;
 
+    // agy cards are already-denied: close only, never invoke allow.
+    if (allow && !permissionCanAllowOnce(pendingPermission)) {
+      setPendingPermission(null);
+      return;
+    }
+
     // Only single-shot decisions. Never match allow_always / *-session
     // (Grok lists allow-edits-session first; includes('allow') would auto-pick it).
     let optionId = allow ? 'allow-once' : 'reject-once';
@@ -220,7 +234,10 @@ export default function App() {
       const match = pendingPermission.options.find((o) =>
         allow
           ? o.kind === 'allow_once' || o.optionId === 'allow-once'
-          : o.kind === 'reject_once' || o.optionId === 'reject-once'
+          : o.kind === 'reject_once' ||
+            o.optionId === 'reject-once' ||
+            o.kind === 'dismiss' ||
+            o.optionId === 'dismiss'
       );
       if (match) optionId = match.optionId;
     }
@@ -234,6 +251,19 @@ export default function App() {
       console.error('Permission respond error:', err);
     }
     setPendingPermission(null);
+  };
+
+  const handleOpenDesktop = async (appId: 'kayg' | 'antigravity') => {
+    setLaunchHint(null);
+    try {
+      const msg = await invoke<string>('open_desktop_app', {
+        appId,
+        workspace,
+      });
+      setLaunchHint(msg);
+    } catch (err: unknown) {
+      setLaunchHint(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const activeCli = systemStatus?.[selectedBackend];
@@ -326,6 +356,42 @@ export default function App() {
             <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"></span>
             执行中
           </span>
+        )}
+      </div>
+
+      {/* Desktop launcher: pick workspace, open installed apps. Does not replace them. */}
+      <div className="px-4 py-3 border-b border-neutral-800/60 bg-neutral-900/20 space-y-2 shrink-0">
+        <p className="text-[11px] text-neutral-400 leading-relaxed">
+          日常 Grok 用 KayG / Grok Build GUI（审计），日常 Gemini 用官方 Antigravity 桌面（实现）。本仓只选工作区并打开已装应用，不替代它们。
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          {systemStatus?.kayg?.installed ? (
+            <button
+              onClick={() => handleOpenDesktop('kayg')}
+              className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition"
+            >
+              打开 KayG / Grok Build GUI
+            </button>
+          ) : !loadingStatus ? (
+            <span className="text-[11px] text-neutral-500">
+              {systemStatus?.kayg?.installHint || '未检测到 KayG / Grok Build GUI。'}
+            </span>
+          ) : null}
+          {systemStatus?.antigravity?.installed ? (
+            <button
+              onClick={() => handleOpenDesktop('antigravity')}
+              className="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold transition"
+            >
+              打开 Antigravity
+            </button>
+          ) : !loadingStatus ? (
+            <span className="text-[11px] text-neutral-500">
+              {systemStatus?.antigravity?.installHint || '未检测到官方 Antigravity 桌面。'}
+            </span>
+          ) : null}
+        </div>
+        {launchHint && (
+          <p className="text-[11px] text-neutral-400">{launchHint}</p>
         )}
       </div>
 
@@ -464,7 +530,11 @@ export default function App() {
             <div className="flex items-start gap-2.5">
               <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
               <div>
-                <h4 className="font-bold text-amber-200 text-sm">CLI 权限执行请求</h4>
+                <h4 className="font-bold text-amber-200 text-sm">
+                  {permissionCanAllowOnce(pendingPermission)
+                    ? 'CLI 权限执行请求'
+                    : 'CLI 已拒绝该操作'}
+                </h4>
                 <p className="text-neutral-300 mt-1 font-medium">
                   {pendingPermission.title || `操作工具: ${pendingPermission.toolName}`}
                 </p>
@@ -474,26 +544,40 @@ export default function App() {
                   </div>
                 )}
                 <p className="text-neutral-500 mt-1 text-[11px]">
-                  安全约束：权限默认不放行。点击拒绝将终止此操作，点击允许仅单次放行。
+                  {permissionCanAllowOnce(pendingPermission)
+                    ? '安全约束：权限默认不放行。点击拒绝将终止此操作，点击允许仅单次放行。'
+                    : 'agy headless 已拒绝，本窗口无法放行。关闭即可。日常实现请打开官方 Antigravity 桌面。'}
                 </p>
               </div>
             </div>
 
             <div className="flex justify-end gap-2 pt-2 border-t border-neutral-800">
-              <button
-                onClick={() => handlePermissionDecision(false)}
-                className="px-4 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-semibold transition flex items-center gap-1.5"
-              >
-                <XCircle className="w-3.5 h-3.5 text-red-400" />
-                <span>拒绝 (默认)</span>
-              </button>
-              <button
-                onClick={() => handlePermissionDecision(true)}
-                className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold transition flex items-center gap-1.5 shadow-md shadow-emerald-950"
-              >
-                <Check className="w-3.5 h-3.5" />
-                <span>允许执行</span>
-              </button>
+              {permissionCanAllowOnce(pendingPermission) ? (
+                <>
+                  <button
+                    onClick={() => handlePermissionDecision(false)}
+                    className="px-4 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-semibold transition flex items-center gap-1.5"
+                  >
+                    <XCircle className="w-3.5 h-3.5 text-red-400" />
+                    <span>拒绝 (默认)</span>
+                  </button>
+                  <button
+                    onClick={() => handlePermissionDecision(true)}
+                    className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold transition flex items-center gap-1.5 shadow-md shadow-emerald-950"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>允许执行</span>
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => handlePermissionDecision(false)}
+                  className="px-4 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-semibold transition flex items-center gap-1.5"
+                >
+                  <XCircle className="w-3.5 h-3.5 text-neutral-400" />
+                  <span>关闭</span>
+                </button>
+              )}
             </div>
           </div>
         )}

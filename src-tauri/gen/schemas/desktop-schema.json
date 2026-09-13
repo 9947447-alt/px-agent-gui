@@ -177,16 +177,22 @@
       "description": "Permission identifier",
       "oneOf": [
         {
-          "description": "Main-window commands used by the GUI\n#### This default permission set includes:\n\n- `allow-probe-status`\n- `allow-start-task`\n- `allow-respond-permission`\n- `allow-stop-session`",
+          "description": "Main-window commands used by the GUI\n#### This default permission set includes:\n\n- `allow-probe-status`\n- `allow-start-task`\n- `allow-respond-permission`\n- `allow-stop-session`\n- `allow-open-desktop-app`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Main-window commands used by the GUI\n#### This default permission set includes:\n\n- `allow-probe-status`\n- `allow-start-task`\n- `allow-respond-permission`\n- `allow-stop-session`"
+          "markdownDescription": "Main-window commands used by the GUI\n#### This default permission set includes:\n\n- `allow-probe-status`\n- `allow-start-task`\n- `allow-respond-permission`\n- `allow-stop-session`\n- `allow-open-desktop-app`"
         },
         {
-          "description": "Allows probing grok/agy install and login status",
+          "description": "Allows opening an already-installed KayG or Antigravity desktop app via macOS open",
+          "type": "string",
+          "const": "allow-open-desktop-app",
+          "markdownDescription": "Allows opening an already-installed KayG or Antigravity desktop app via macOS open"
+        },
+        {
+          "description": "Allows probing grok/agy CLI and installed desktop apps",
           "type": "string",
           "const": "allow-probe-status",
-          "markdownDescription": "Allows probing grok/agy install and login status"
+          "markdownDescription": "Allows probing grok/agy CLI and installed desktop apps"
         },
         {
           "description": "Allows sending a single-shot permission decision",

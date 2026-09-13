@@ -5,13 +5,14 @@
       "allow-probe-status",
       "allow-start-task",
       "allow-respond-permission",
-      "allow-stop-session"
+      "allow-stop-session",
+      "allow-open-desktop-app"
     ]
   },
   "permission": [
     {
       "identifier": "allow-probe-status",
-      "description": "Allows probing grok/agy install and login status",
+      "description": "Allows probing grok/agy CLI and installed desktop apps",
       "commands": { "allow": ["probe_status"] }
     },
     {
@@ -28,6 +29,11 @@
       "identifier": "allow-stop-session",
       "description": "Allows stopping the active CLI session",
       "commands": { "allow": ["stop_session"] }
+    },
+    {
+      "identifier": "allow-open-desktop-app",
+      "description": "Allows opening an already-installed KayG or Antigravity desktop app via macOS open",
+      "commands": { "allow": ["open_desktop_app"] }
     }
   ]
 }

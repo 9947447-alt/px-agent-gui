@@ -8,6 +8,7 @@
     "allow-probe-status",
     "allow-start-task",
     "allow-respond-permission",
-    "allow-stop-session"
+    "allow-stop-session",
+    "allow-open-desktop-app"
   ]
 }

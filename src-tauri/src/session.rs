@@ -37,6 +37,9 @@ pub struct PermissionRequestPayload {
     pub title: String,
     pub command: Option<String>,
     pub options: Vec<PermissionOptionPayload>,
+    /// agy headless already denied; GUI must not offer or report a successful allow.
+    #[serde(default)]
+    pub already_denied: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,19 +102,49 @@ fn spawn_stderr_drain(stderr: Option<tokio::process::ChildStderr>) {
     });
 }
 
-fn once_only_options() -> Vec<PermissionOptionPayload> {
-    vec![
-        PermissionOptionPayload {
-            option_id: "allow-once".to_string(),
-            name: "允许执行".to_string(),
-            kind: Some("allow_once".to_string()),
-        },
-        PermissionOptionPayload {
-            option_id: "reject-once".to_string(),
-            name: "拒绝 (默认)".to_string(),
-            kind: Some("reject_once".to_string()),
-        },
-    ]
+/// agy headless already denied the tool. Cards are informational: close only.
+fn agy_denied_options() -> Vec<PermissionOptionPayload> {
+    vec![PermissionOptionPayload {
+        option_id: "dismiss".to_string(),
+        name: "关闭".to_string(),
+        kind: Some("dismiss".to_string()),
+    }]
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PermissionPlan {
+    SendToGrokStdin,
+    AcknowledgeAgyDenied,
+}
+
+fn plan_permission_response(backend: &str, option_id: &str) -> Result<PermissionPlan, String> {
+    if is_session_wide_allow(option_id) {
+        return Err(format!(
+            "拒绝会话级放行 optionId={}，仅允许单次 allow-once / reject-once",
+            option_id
+        ));
+    }
+    match backend {
+        "grok" => {
+            if !is_once_option(option_id) {
+                return Err(format!(
+                    "拒绝会话级放行 optionId={}，仅允许单次 allow-once / reject-once",
+                    option_id
+                ));
+            }
+            Ok(PermissionPlan::SendToGrokStdin)
+        }
+        "agy" => {
+            if option_id == "dismiss" || option_id == "reject-once" {
+                return Ok(PermissionPlan::AcknowledgeAgyDenied);
+            }
+            return Err(
+                "agy 官方 headless 已拒绝该操作，本窗口无法放行。请改用官方 Antigravity 桌面端。"
+                    .to_string(),
+            );
+        }
+        other => Err(format!("不支持的后端类型: {}", other)),
+    }
 }
 
 /// Map an agy `step_update` object to a GUI permission card.
@@ -154,18 +187,14 @@ fn agy_permission_from_step(
                 Some(err_msg.to_string())
             }
         });
-    let title = if is_denied {
-        format!("权限被拒绝: {}", tool_name)
-    } else {
-        format!("请求权限: {}", tool_name)
-    };
     Some(PermissionRequestPayload {
         id: step.get("step_index").cloned().unwrap_or(Value::Null),
         session_id: session_id.to_string(),
         tool_name: tool_name.to_string(),
-        title,
+        title: format!("CLI 已拒绝: {}", tool_name),
         command,
-        options: once_only_options(),
+        options: agy_denied_options(),
+        already_denied: true,
     })
 }
 
@@ -174,15 +203,12 @@ pub async fn respond_permission(
     request_id: Value,
     option_id: String,
 ) -> Result<(), String> {
-    if is_session_wide_allow(&option_id) || !is_once_option(&option_id) {
-        return Err(format!(
-            "拒绝会话级放行 optionId={}，仅允许单次 allow-once / reject-once",
-            option_id
-        ));
-    }
     let lock = state.active.lock().await;
-    if let Some(session) = lock.as_ref() {
-        if session.backend == "grok" {
+    let Some(session) = lock.as_ref() else {
+        return Err("当前无等待权限审批的会话".to_string());
+    };
+    match plan_permission_response(&session.backend, &option_id)? {
+        PermissionPlan::SendToGrokStdin => {
             let resp = json!({
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -199,15 +225,13 @@ pub async fn respond_permission(
                 .send(line)
                 .await
                 .map_err(|e| format!("发送权限决策失败: {}", e))?;
-            return Ok(());
+            Ok(())
         }
-        if session.backend == "agy" {
-            // Official headless stream-json stdin only accepts `event: user`.
-            // Permission decision events are ignored; Ask tools are already soft-denied.
-            return Ok(());
+        PermissionPlan::AcknowledgeAgyDenied => {
+            // Headless stdin only accepts `event: user`. Do not invent a grant.
+            Ok(())
         }
     }
-    Err("当前无等待权限审批的会话".to_string())
 }
 
 pub async fn start_task(
@@ -478,6 +502,7 @@ pub async fn start_task(
                                     title: tool_title,
                                     command: raw_cmd,
                                     options,
+                                    already_denied: false,
                                 },
                             );
                         }
@@ -667,7 +692,7 @@ mod tests {
     }
 
     #[test]
-    fn agy_denied_run_command_becomes_once_only_card() {
+    fn agy_denied_run_command_is_informational_card_without_allow() {
         let step = json!({
             "conversation_id": "c8e473af-14e9-4bf8-88e8-e72497e9aa94",
             "step_index": 4,
@@ -686,15 +711,17 @@ mod tests {
         let perm = agy_permission_from_step("sess-1", &step).expect("denied tool should emit card");
         assert_eq!(perm.tool_name, "run_command");
         assert_eq!(perm.command.as_deref(), Some("echo AGY_PERM_PROBE > /tmp/px_agy_perm_probe.txt"));
+        assert!(perm.already_denied);
+        assert!(perm.title.starts_with("CLI 已拒绝"));
         assert_eq!(
             perm.options
                 .iter()
                 .map(|o| o.option_id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["allow-once", "reject-once"]
+            vec!["dismiss"]
         );
-        assert!(perm.options.iter().all(|o| {
-            o.kind.as_deref() == Some("allow_once") || o.kind.as_deref() == Some("reject_once")
+        assert!(!perm.options.iter().any(|o| {
+            o.option_id == "allow-once" || o.kind.as_deref() == Some("allow_once")
         }));
         assert!(!perm.options.iter().any(|o| is_session_wide_allow(&o.option_id)));
     }
@@ -716,7 +743,7 @@ mod tests {
     }
 
     #[test]
-    fn agy_ask_permission_tool_emits_once_only_card() {
+    fn agy_ask_permission_tool_emits_denied_card_without_allow() {
         let step = json!({
             "step_index": 3,
             "state": "ACTIVE",
@@ -726,7 +753,39 @@ mod tests {
         });
         let perm = agy_permission_from_step("sess-1", &step).expect("ask_permission should emit card");
         assert_eq!(perm.tool_name, "ask_permission");
-        assert_eq!(perm.options[0].option_id, "allow-once");
-        assert_eq!(perm.options[1].option_id, "reject-once");
+        assert!(perm.already_denied);
+        assert_eq!(perm.options[0].option_id, "dismiss");
+        assert!(!perm.options.iter().any(|o| o.option_id == "allow-once"));
+    }
+
+    #[test]
+    fn grok_once_permission_plan_unchanged() {
+        assert_eq!(
+            plan_permission_response("grok", "allow-once").unwrap(),
+            PermissionPlan::SendToGrokStdin
+        );
+        assert_eq!(
+            plan_permission_response("grok", "reject-once").unwrap(),
+            PermissionPlan::SendToGrokStdin
+        );
+        assert!(plan_permission_response("grok", "allow-edits-session").is_err());
+        assert!(plan_permission_response("grok", "allow-always").is_err());
+        assert!(plan_permission_response("grok", "dismiss").is_err());
+    }
+
+    #[test]
+    fn agy_allow_is_not_reported_as_granted() {
+        let err = plan_permission_response("agy", "allow-once").unwrap_err();
+        assert!(err.contains("无法放行"), "allow must not look like a grant: {err}");
+        assert!(!err.contains("成功"));
+        assert!(plan_permission_response("agy", "allow-always").is_err());
+        assert_eq!(
+            plan_permission_response("agy", "dismiss").unwrap(),
+            PermissionPlan::AcknowledgeAgyDenied
+        );
+        assert_eq!(
+            plan_permission_response("agy", "reject-once").unwrap(),
+            PermissionPlan::AcknowledgeAgyDenied
+        );
     }
 }
