@@ -213,14 +213,14 @@ export default function App() {
   const handlePermissionDecision = async (allow: boolean) => {
     if (!pendingPermission) return;
 
-    // Find the matching option id
-    // In Grok: allow-once / reject-once
+    // Only single-shot decisions. Never match allow_always / *-session
+    // (Grok lists allow-edits-session first; includes('allow') would auto-pick it).
     let optionId = allow ? 'allow-once' : 'reject-once';
     if (pendingPermission.options?.length > 0) {
       const match = pendingPermission.options.find((o) =>
         allow
-          ? o.kind === 'allow_once' || o.optionId.includes('allow')
-          : o.kind === 'reject_once' || o.optionId.includes('reject')
+          ? o.kind === 'allow_once' || o.optionId === 'allow-once'
+          : o.kind === 'reject_once' || o.optionId === 'reject-once'
       );
       if (match) optionId = match.optionId;
     }

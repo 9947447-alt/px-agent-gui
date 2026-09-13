@@ -73,11 +73,22 @@ pub async fn stop_active_session(state: &SessionState) {
     }
 }
 
+fn is_session_wide_allow(option_id: &str) -> bool {
+    let id = option_id.to_ascii_lowercase();
+    id.contains("always") || (id.contains("allow") && id.contains("session"))
+}
+
 pub async fn respond_permission(
     state: &SessionState,
     request_id: Value,
     option_id: String,
 ) -> Result<(), String> {
+    if is_session_wide_allow(&option_id) {
+        return Err(format!(
+            "拒绝会话级放行 optionId={}，仅允许单次 allow-once / reject-once",
+            option_id
+        ));
+    }
     let lock = state.active.lock().await;
     if let Some(session) = lock.as_ref() {
         if session.backend == "grok" {
