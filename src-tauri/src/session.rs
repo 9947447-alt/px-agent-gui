@@ -263,12 +263,57 @@ pub async fn respond_permission(
     }
 }
 
+pub fn build_grok_agent_args(model: Option<&str>, reasoning_effort: Option<&str>) -> Vec<String> {
+    let mut args = vec!["agent".to_string()];
+    if let Some(m) = model {
+        let m = m.trim();
+        if !m.is_empty() {
+            args.push("-m".to_string());
+            args.push(m.to_string());
+        }
+    }
+    if let Some(e) = reasoning_effort {
+        let e = e.trim();
+        if !e.is_empty() && e != "default" {
+            args.push("--reasoning-effort".to_string());
+            args.push(e.to_string());
+        }
+    }
+    args.push("stdio".to_string());
+    args
+}
+
+pub fn build_agy_args(model: Option<&str>, reasoning_effort: Option<&str>) -> Vec<String> {
+    let mut args = vec![];
+    if let Some(m) = model {
+        let m = m.trim();
+        if !m.is_empty() {
+            args.push("--model".to_string());
+            args.push(m.to_string());
+        }
+    }
+    if let Some(e) = reasoning_effort {
+        let e = e.trim();
+        if !e.is_empty() && e != "default" {
+            args.push("--effort".to_string());
+            args.push(e.to_string());
+        }
+    }
+    args.push("--input-format".to_string());
+    args.push("stream-json".to_string());
+    args.push("--output-format".to_string());
+    args.push("stream-json".to_string());
+    args
+}
+
 pub async fn start_task(
     app: AppHandle,
     state: &SessionState,
     backend: String,
     workspace: String,
     prompt: String,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
 ) -> Result<String, String> {
     // 1. 终止已有会话
     stop_active_session(state).await;
@@ -292,7 +337,8 @@ pub async fn start_task(
                 .ok_or_else(|| "未找到 grok 二进制文件".to_string())?;
 
             let mut cmd = Command::new(grok_path);
-            cmd.arg("agent").arg("stdio");
+            let args = build_grok_agent_args(model.as_deref(), reasoning_effort.as_deref());
+            cmd.args(&args);
             cmd.current_dir(&workspace_path);
             cmd.stdin(Stdio::piped());
             cmd.stdout(Stdio::piped());
@@ -535,8 +581,8 @@ pub async fn start_task(
                 .ok_or_else(|| "未找到 agy 二进制文件".to_string())?;
 
             let mut cmd = Command::new(agy_path);
-            cmd.arg("--input-format").arg("stream-json");
-            cmd.arg("--output-format").arg("stream-json");
+            let args = build_agy_args(model.as_deref(), reasoning_effort.as_deref());
+            cmd.args(&args);
             cmd.current_dir(&workspace_path);
             cmd.stdin(Stdio::piped());
             cmd.stdout(Stdio::piped());
@@ -828,5 +874,44 @@ mod tests {
             plan_permission_response("agy", "reject-once").unwrap(),
             PermissionPlan::AcknowledgeAgyDenied
         );
+    }
+
+    #[test]
+    fn build_grok_agent_args_places_model_and_effort_before_stdio() {
+        let default_args = build_grok_agent_args(None, None);
+        assert_eq!(default_args, vec!["agent", "stdio"]);
+
+        let custom_args = build_grok_agent_args(Some("grok-4.5"), Some("low"));
+        assert_eq!(
+            custom_args,
+            vec!["agent", "-m", "grok-4.5", "--reasoning-effort", "low", "stdio"]
+        );
+
+        let effort_default_skipped = build_grok_agent_args(Some("grok-4.6"), Some("default"));
+        assert_eq!(effort_default_skipped, vec!["agent", "-m", "grok-4.6", "stdio"]);
+
+        let joined = custom_args.join(" ");
+        assert!(!joined.contains("always-approve"));
+        assert!(!joined.contains("dangerously-skip-permissions"));
+    }
+
+    #[test]
+    fn build_agy_args_preserves_stream_json_and_never_skips_permissions() {
+        let args = build_agy_args(Some("gemini-3.8-flash-high"), None);
+        assert_eq!(
+            args,
+            vec![
+                "--model",
+                "gemini-3.8-flash-high",
+                "--input-format",
+                "stream-json",
+                "--output-format",
+                "stream-json"
+            ]
+        );
+
+        let joined = args.join(" ");
+        assert!(!joined.contains("dangerously-skip-permissions"));
+        assert!(!joined.contains("always"));
     }
 }

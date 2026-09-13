@@ -23,8 +23,10 @@ async fn start_task(
     backend: String,
     workspace: String,
     prompt: String,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
 ) -> Result<String, String> {
-    handle_start_task(app, &state, backend, workspace, prompt).await
+    handle_start_task(app, &state, backend, workspace, prompt, model, reasoning_effort).await
 }
 
 #[tauri::command]

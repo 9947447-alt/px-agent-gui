@@ -11,6 +11,11 @@ pub struct CliStatus {
     pub logged_in: bool,
     pub path: Option<String>,
     pub models: Vec<String>,
+    pub supports_model: bool,
+    pub supports_reasoning_effort: bool,
+    pub reasoning_efforts: Vec<String>,
+    pub default_model: Option<String>,
+    pub default_reasoning_effort: Option<String>,
     pub install_command: String,
     pub login_command: String,
     pub error: Option<String>,
@@ -299,6 +304,11 @@ pub async fn probe_grok() -> CliStatus {
             logged_in: false,
             path: None,
             models: vec![],
+            supports_model: false,
+            supports_reasoning_effort: false,
+            reasoning_efforts: vec![],
+            default_model: None,
+            default_reasoning_effort: None,
             install_command: install_cmd,
             login_command: login_cmd,
             error: Some("找不到 grok 二进制文件".to_string()),
@@ -317,15 +327,21 @@ pub async fn probe_grok() -> CliStatus {
                 Ok(out) if out.status.success() => {
                     let text = String::from_utf8_lossy(&out.stdout);
                     let mut models = vec![];
+                    let mut default_model = None;
                     for line in text.lines() {
                         let trimmed = line.trim();
                         if trimmed.starts_with('*') || trimmed.starts_with('-') {
-                            let name = trimmed.trim_start_matches(|c| c == '*' || c == '-' || c == ' ')
+                            let is_default = trimmed.starts_with('*');
+                            let name = trimmed
+                                .trim_start_matches(|c| c == '*' || c == '-' || c == ' ')
                                 .split_whitespace()
                                 .next()
                                 .unwrap_or("")
                                 .to_string();
                             if !name.is_empty() {
+                                if is_default && default_model.is_none() {
+                                    default_model = Some(name.clone());
+                                }
                                 models.push(name);
                             }
                         }
@@ -333,12 +349,25 @@ pub async fn probe_grok() -> CliStatus {
                     if models.is_empty() {
                         models.push("grok-4.6".to_string());
                     }
+                    if default_model.is_none() {
+                        default_model = models.first().cloned();
+                    }
                     CliStatus {
                         backend: "grok".to_string(),
                         installed: true,
                         logged_in: true,
                         path: Some(path_str),
                         models,
+                        supports_model: true,
+                        supports_reasoning_effort: true,
+                        reasoning_efforts: vec![
+                            "high".to_string(),
+                            "medium".to_string(),
+                            "low".to_string(),
+                            "xhigh".to_string(),
+                        ],
+                        default_model,
+                        default_reasoning_effort: Some("high".to_string()),
                         install_command: install_cmd,
                         login_command: login_cmd,
                         error: None,
@@ -352,6 +381,11 @@ pub async fn probe_grok() -> CliStatus {
                         logged_in: false,
                         path: Some(path_str),
                         models: vec![],
+                        supports_model: false,
+                        supports_reasoning_effort: false,
+                        reasoning_efforts: vec![],
+                        default_model: None,
+                        default_reasoning_effort: None,
                         install_command: install_cmd,
                         login_command: login_cmd,
                         error: Some(if err_msg.is_empty() { "未登录".to_string() } else { err_msg }),
@@ -363,6 +397,11 @@ pub async fn probe_grok() -> CliStatus {
                     logged_in: false,
                     path: Some(path_str),
                     models: vec![],
+                    supports_model: false,
+                    supports_reasoning_effort: false,
+                    reasoning_efforts: vec![],
+                    default_model: None,
+                    default_reasoning_effort: None,
                     install_command: install_cmd,
                     login_command: login_cmd,
                     error: Some(format!("执行 grok models 失败: {}", e)),
@@ -392,6 +431,11 @@ pub async fn probe_agy() -> CliStatus {
             logged_in: false,
             path: None,
             models: vec![],
+            supports_model: false,
+            supports_reasoning_effort: false,
+            reasoning_efforts: vec![],
+            default_model: None,
+            default_reasoning_effort: None,
             install_command: install_cmd,
             login_command: login_cmd,
             error: Some("找不到 agy 二进制文件".to_string()),
@@ -423,12 +467,18 @@ pub async fn probe_agy() -> CliStatus {
                     if models.is_empty() {
                         models.push("gemini-3.8-flash-high".to_string());
                     }
+                    let default_model = models.first().cloned();
                     CliStatus {
                         backend: "agy".to_string(),
                         installed: true,
                         logged_in: true,
                         path: Some(path_str),
                         models,
+                        supports_model: true,
+                        supports_reasoning_effort: false, // 模型已内置推理等级，无假滑条
+                        reasoning_efforts: vec![],
+                        default_model,
+                        default_reasoning_effort: None,
                         install_command: install_cmd,
                         login_command: login_cmd,
                         error: None,
@@ -442,6 +492,11 @@ pub async fn probe_agy() -> CliStatus {
                         logged_in: false,
                         path: Some(path_str),
                         models: vec![],
+                        supports_model: false,
+                        supports_reasoning_effort: false,
+                        reasoning_efforts: vec![],
+                        default_model: None,
+                        default_reasoning_effort: None,
                         install_command: install_cmd,
                         login_command: login_cmd,
                         error: Some(if err_msg.is_empty() { "未登录".to_string() } else { err_msg }),
@@ -453,6 +508,11 @@ pub async fn probe_agy() -> CliStatus {
                     logged_in: false,
                     path: Some(path_str),
                     models: vec![],
+                    supports_model: false,
+                    supports_reasoning_effort: false,
+                    reasoning_efforts: vec![],
+                    default_model: None,
+                    default_reasoning_effort: None,
                     install_command: install_cmd,
                     login_command: login_cmd,
                     error: Some(format!("执行 agy models 失败: {}", e)),
@@ -558,4 +618,50 @@ mod tests {
             Some(Path::new("/Applications/Grok GUI.app"))
         );
     }
+
+    #[test]
+    fn uninstalled_cli_status_has_no_models_and_no_effort() {
+        let status = CliStatus {
+            backend: "grok".to_string(),
+            installed: false,
+            logged_in: false,
+            path: None,
+            models: vec![],
+            supports_model: false,
+            supports_reasoning_effort: false,
+            reasoning_efforts: vec![],
+            default_model: None,
+            default_reasoning_effort: None,
+            install_command: "install".to_string(),
+            login_command: "login".to_string(),
+            error: Some("未安装".to_string()),
+        };
+        assert!(!status.supports_model);
+        assert!(!status.supports_reasoning_effort);
+        assert!(status.models.is_empty());
+        assert!(status.reasoning_efforts.is_empty());
+    }
+
+    #[test]
+    fn agy_status_has_no_reasoning_effort_controls() {
+        let status = CliStatus {
+            backend: "agy".to_string(),
+            installed: true,
+            logged_in: true,
+            path: Some("/tmp/bin/agy".to_string()),
+            models: vec!["gemini-3.8-flash-high".to_string()],
+            supports_model: true,
+            supports_reasoning_effort: false,
+            reasoning_efforts: vec![],
+            default_model: Some("gemini-3.8-flash-high".to_string()),
+            default_reasoning_effort: None,
+            install_command: "install".to_string(),
+            login_command: "login".to_string(),
+            error: None,
+        };
+        assert!(status.supports_model);
+        assert!(!status.supports_reasoning_effort);
+        assert!(status.reasoning_efforts.is_empty());
+    }
 }
+

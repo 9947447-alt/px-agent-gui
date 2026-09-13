@@ -6,6 +6,11 @@ export interface CliStatus {
   loggedIn: boolean;
   path: string | null;
   models: string[];
+  supportsModel: boolean;
+  supportsReasoningEffort: boolean;
+  reasoningEfforts: string[];
+  defaultModel?: string | null;
+  defaultReasoningEffort?: string | null;
   installCommand: string;
   loginCommand: string;
   error?: string;
@@ -55,3 +60,4 @@ export interface MessageItem {
   };
   createdAt: number;
 }
+

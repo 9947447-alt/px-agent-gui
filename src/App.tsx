@@ -15,9 +15,12 @@ import {
   Check, 
   Cpu,
   Sparkles,
-  AlertTriangle
+  AlertTriangle,
+  Sliders
 } from 'lucide-react';
 import { BackendType, SystemStatus, PermissionRequest, MessageItem } from './types';
+import logoApp from '../design/logo-app-1024.png';
+import logoMark from '../design/logo-mark-1024.png';
 
 function permissionCanAllowOnce(req: PermissionRequest): boolean {
   if (req.alreadyDenied) return false;
@@ -31,6 +34,8 @@ export default function App() {
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [selectedBackend, setSelectedBackend] = useState<BackendType>('grok');
   const [workspace, setWorkspace] = useState('');
+  const [selectedModel, setSelectedModel] = useState('');
+  const [selectedReasoningEffort, setSelectedReasoningEffort] = useState('');
   const [prompt, setPrompt] = useState('');
   const [isRunning, setIsRunning] = useState(false);
   const [messages, setMessages] = useState<MessageItem[]>([]);
@@ -67,6 +72,29 @@ export default function App() {
   useEffect(() => {
     checkStatus();
   }, []);
+
+  // Sync model & reasoning effort whenever status or backend changes
+  useEffect(() => {
+    if (!systemStatus) return;
+    const currentCli = systemStatus[selectedBackend];
+    if (currentCli) {
+      if (currentCli.supportsModel && currentCli.models.length > 0) {
+        if (!currentCli.models.includes(selectedModel)) {
+          setSelectedModel(currentCli.defaultModel || currentCli.models[0]);
+        }
+      } else {
+        setSelectedModel('');
+      }
+
+      if (currentCli.supportsReasoningEffort && currentCli.reasoningEfforts.length > 0) {
+        if (!currentCli.reasoningEfforts.includes(selectedReasoningEffort)) {
+          setSelectedReasoningEffort(currentCli.defaultReasoningEffort || currentCli.reasoningEfforts[0]);
+        }
+      } else {
+        setSelectedReasoningEffort('');
+      }
+    }
+  }, [systemStatus, selectedBackend]);
 
   // Listen for Tauri events from Rust backend
   useEffect(() => {
@@ -190,6 +218,8 @@ export default function App() {
         backend: selectedBackend,
         workspace,
         prompt: userPrompt,
+        model: selectedModel.trim() ? selectedModel.trim() : null,
+        reasoningEffort: (currentCli?.supportsReasoningEffort && selectedReasoningEffort.trim()) ? selectedReasoningEffort.trim() : null,
       });
       console.log("Session started:", sessId);
     } catch (err: any) {
@@ -270,18 +300,23 @@ export default function App() {
   const isBackendReady = activeCli?.installed && activeCli?.loggedIn;
 
   return (
-    <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100 select-none overflow-hidden">
-      {/* Top Header */}
-      <header className="h-14 border-b border-neutral-800/80 bg-neutral-900/60 backdrop-blur px-4 flex items-center justify-between shrink-0">
+    <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100 select-none overflow-hidden font-sans">
+      {/* 1. Top Header 标题栏 */}
+      <header className="h-14 border-b border-neutral-800/80 bg-neutral-900/70 backdrop-blur px-4 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 font-semibold text-sm tracking-tight text-neutral-200">
-            <span className="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.6)]"></span>
+            {/* 标题栏小尺寸线标 */}
+            <img 
+              src={logoMark} 
+              alt="PX Mark" 
+              className="w-6 h-6 object-contain rounded drop-shadow-sm" 
+            />
             <span>PX Agent GUI</span>
-            <span className="text-xs px-2 py-0.5 rounded bg-neutral-800 text-neutral-400 font-mono">v0.1</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-400 font-mono">v0.1</span>
           </div>
 
-          {/* Backend Selector Tabs */}
-          <div className="flex bg-neutral-800/80 p-0.5 rounded-lg border border-neutral-700/50 ml-4">
+          {/* 后端切换 Tabs */}
+          <div className="flex bg-neutral-800/80 p-0.5 rounded-lg border border-neutral-700/50 ml-3">
             <button
               onClick={() => handleBackendChange('grok')}
               className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition ${
@@ -307,10 +342,10 @@ export default function App() {
           </div>
         </div>
 
-        {/* Backend Status Indicators */}
+        {/* 后端状态指示与刷新 */}
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 text-xs">
-            <span className="text-neutral-500">当前后端:</span>
+            <span className="text-neutral-500">后端状态:</span>
             {loadingStatus ? (
               <span className="text-neutral-400 flex items-center gap-1">
                 <RefreshCw className="w-3 h-3 animate-spin" /> 探测中...
@@ -318,8 +353,8 @@ export default function App() {
             ) : isBackendReady ? (
               <span className="text-emerald-400 flex items-center gap-1 font-medium">
                 <CheckCircle2 className="w-3.5 h-3.5" /> 已就绪
-                {activeCli?.models?.[0] && (
-                  <span className="text-neutral-500 font-normal">({activeCli.models[0]})</span>
+                {selectedModel && (
+                  <span className="text-neutral-500 font-normal">({selectedModel})</span>
                 )}
               </span>
             ) : (
@@ -339,61 +374,138 @@ export default function App() {
         </div>
       </header>
 
-      {/* Workspace Bar */}
-      <div className="px-4 py-2 border-b border-neutral-800/60 bg-neutral-900/30 flex items-center gap-2 text-xs shrink-0">
-        <Folder className="w-4 h-4 text-neutral-400 shrink-0" />
-        <span className="text-neutral-400 shrink-0">工作区 (cwd):</span>
-        <input
-          type="text"
-          value={workspace}
-          onChange={(e) => setWorkspace(e.target.value)}
-          disabled={isRunning}
-          className="flex-1 bg-neutral-950/80 border border-neutral-800 rounded px-2.5 py-1 text-neutral-200 font-mono text-xs focus:outline-none focus:border-blue-500 transition disabled:opacity-50"
-          placeholder="/path/to/project/workspace"
-        />
-        {isRunning && (
-          <span className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 shrink-0">
-            <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"></span>
-            执行中
-          </span>
-        )}
-      </div>
+      {/* 2. Control Deck 控制区：Logo主标、启动器、工作区、模型与推理强度 */}
+      <section className="border-b border-neutral-800/80 bg-neutral-900/30 shrink-0">
+        {/* Logo 窗口主标与外部应用启动器 */}
+        <div className="px-4 py-3 border-b border-neutral-800/50 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            {/* 窗口主标 */}
+            <img 
+              src={logoApp} 
+              alt="PX Agent Logo" 
+              className="w-10 h-10 object-contain rounded-xl shadow-md border border-neutral-800/80 shrink-0" 
+            />
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h1 className="text-xs font-semibold text-neutral-200">薄客户端控制台</h1>
+                <span className="text-[11px] text-neutral-400 truncate">
+                  日常 Grok 用 KayG（审计），日常 Gemini 用官方 Antigravity（实现）
+                </span>
+              </div>
+              <p className="text-[11px] text-neutral-400 leading-tight mt-0.5">
+                本窗仅配置工作区驱动官方 CLI，不替代官方桌面工具。
+              </p>
+            </div>
+          </div>
 
-      {/* Desktop launcher: pick workspace, open installed apps. Does not replace them. */}
-      <div className="px-4 py-3 border-b border-neutral-800/60 bg-neutral-900/20 space-y-2 shrink-0">
-        <p className="text-[11px] text-neutral-400 leading-relaxed">
-          日常 Grok 用 KayG / Grok Build GUI（审计），日常 Gemini 用官方 Antigravity 桌面（实现）。本仓只选工作区并打开已装应用，不替代它们。
-        </p>
-        <div className="flex flex-wrap items-center gap-2">
-          {systemStatus?.kayg?.installed ? (
-            <button
-              onClick={() => handleOpenDesktop('kayg')}
-              className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition"
-            >
-              打开 KayG / Grok Build GUI
-            </button>
-          ) : !loadingStatus ? (
-            <span className="text-[11px] text-neutral-500">
-              {systemStatus?.kayg?.installHint || '未检测到 KayG / Grok Build GUI。'}
-            </span>
-          ) : null}
-          {systemStatus?.antigravity?.installed ? (
-            <button
-              onClick={() => handleOpenDesktop('antigravity')}
-              className="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold transition"
-            >
-              打开 Antigravity
-            </button>
-          ) : !loadingStatus ? (
-            <span className="text-[11px] text-neutral-500">
-              {systemStatus?.antigravity?.installHint || '未检测到官方 Antigravity 桌面。'}
-            </span>
-          ) : null}
+          {/* 启动器按钮 */}
+          <div className="flex items-center gap-2 shrink-0">
+            {systemStatus?.kayg?.installed ? (
+              <button
+                onClick={() => handleOpenDesktop('kayg')}
+                className="px-2.5 py-1.5 rounded-lg bg-blue-600/90 hover:bg-blue-500 text-white text-xs font-medium transition flex items-center gap-1.5 shadow-sm"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>打开 KayG</span>
+              </button>
+            ) : !loadingStatus ? (
+              <span className="text-[11px] text-neutral-400">未装 KayG</span>
+            ) : null}
+
+            {systemStatus?.antigravity?.installed ? (
+              <button
+                onClick={() => handleOpenDesktop('antigravity')}
+                className="px-2.5 py-1.5 rounded-lg bg-emerald-700/90 hover:bg-emerald-600 text-white text-xs font-medium transition flex items-center gap-1.5 shadow-sm"
+              >
+                <Cpu className="w-3.5 h-3.5" />
+                <span>打开 Antigravity</span>
+              </button>
+            ) : !loadingStatus ? (
+              <span className="text-[11px] text-neutral-400">未装 Antigravity</span>
+            ) : null}
+          </div>
         </div>
+
         {launchHint && (
-          <p className="text-[11px] text-neutral-400">{launchHint}</p>
+          <div className="px-4 py-1.5 bg-neutral-900/60 border-b border-neutral-800/40 text-[11px] text-neutral-300">
+            {launchHint}
+          </div>
         )}
-      </div>
+
+        {/* 工作区、模型选择器、推理强度控制行 */}
+        <div className="px-4 py-2.5 flex flex-wrap items-center gap-4 text-xs">
+          {/* 工作区 (cwd) */}
+          <div className="flex-1 min-w-[240px] flex items-center gap-2">
+            <Folder className="w-4 h-4 text-neutral-400 shrink-0" />
+            <span className="text-neutral-400 shrink-0 font-medium">工作区:</span>
+            <input
+              type="text"
+              value={workspace}
+              onChange={(e) => setWorkspace(e.target.value)}
+              disabled={isRunning}
+              className="flex-1 bg-neutral-950/80 border border-neutral-800 rounded px-2.5 py-1 text-neutral-200 font-mono text-xs focus:outline-none focus:border-blue-500 transition disabled:opacity-50"
+              placeholder="/path/to/project/workspace"
+            />
+          </div>
+
+          {/* 模型选择器（探测失败禁用并标明「未探测」） */}
+          <div className="flex items-center gap-2 shrink-0">
+            <Cpu className="w-3.5 h-3.5 text-neutral-400" />
+            <span className="text-neutral-400 font-medium">模型:</span>
+            {activeCli?.supportsModel && activeCli.models.length > 0 ? (
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                disabled={isRunning}
+                className="bg-neutral-950 border border-neutral-800 rounded px-2.5 py-1 text-neutral-200 text-xs font-mono focus:outline-none focus:border-blue-500 transition disabled:opacity-50 cursor-pointer"
+              >
+                {activeCli.models.map((m) => (
+                  <option key={m} value={m}>
+                    {m} {m === activeCli.defaultModel ? '(默认)' : ''}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <select
+                disabled
+                className="bg-neutral-950/50 border border-neutral-800/60 rounded px-2.5 py-1 text-neutral-400 text-xs font-mono opacity-60 cursor-not-allowed"
+              >
+                <option value="">未探测</option>
+              </select>
+            )}
+          </div>
+
+          {/* 推理强度选择器：有能力才显示，无能力则隐藏，不许做假滑条 */}
+          {activeCli?.supportsReasoningEffort && activeCli.reasoningEfforts.length > 0 ? (
+            <div className="flex items-center gap-2 shrink-0">
+              <Sliders className="w-3.5 h-3.5 text-neutral-400" />
+              <span className="text-neutral-400 font-medium">推理强度:</span>
+              <select
+                value={selectedReasoningEffort}
+                onChange={(e) => setSelectedReasoningEffort(e.target.value)}
+                disabled={isRunning}
+                className="bg-neutral-950 border border-neutral-800 rounded px-2.5 py-1 text-neutral-200 text-xs font-mono focus:outline-none focus:border-blue-500 transition disabled:opacity-50 cursor-pointer"
+              >
+                {activeCli.reasoningEfforts.map((effort) => (
+                  <option key={effort} value={effort}>
+                    {effort === 'high' ? 'high (高 / 默认)' :
+                     effort === 'medium' ? 'medium (中)' :
+                     effort === 'low' ? 'low (低)' :
+                     effort === 'xhigh' ? 'xhigh (超高)' : effort}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+
+          {isRunning && (
+            <span className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 shrink-0 ml-auto">
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"></span>
+              执行中
+            </span>
+          )}
+        </div>
+      </section>
 
       {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
