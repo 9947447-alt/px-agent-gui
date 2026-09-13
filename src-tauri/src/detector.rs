@@ -46,9 +46,14 @@ pub fn find_binary(candidates: &[&str], cmd_name: &str) -> Option<PathBuf> {
 }
 
 pub async fn probe_grok() -> CliStatus {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/a0000".to_string());
-    let default_path = format!("{}/.grok/bin/grok", home);
-    let binary = find_binary(&[&default_path], "grok");
+    let home = std::env::var("HOME").ok();
+    let default_path = home
+        .as_ref()
+        .map(|h| format!("{}/.grok/bin/grok", h));
+    let binary = match default_path.as_deref() {
+        Some(p) => find_binary(&[p], "grok"),
+        None => find_binary(&[], "grok"),
+    };
 
     let install_cmd = "curl -fsSL https://x.ai/cli/install.sh | bash".to_string();
     let login_cmd = "grok login".to_string();
@@ -134,9 +139,14 @@ pub async fn probe_grok() -> CliStatus {
 }
 
 pub async fn probe_agy() -> CliStatus {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/a0000".to_string());
-    let default_path = format!("{}/.local/bin/agy", home);
-    let binary = find_binary(&[&default_path], "agy");
+    let home = std::env::var("HOME").ok();
+    let default_path = home
+        .as_ref()
+        .map(|h| format!("{}/.local/bin/agy", h));
+    let binary = match default_path.as_deref() {
+        Some(p) => find_binary(&[p], "agy"),
+        None => find_binary(&[], "agy"),
+    };
 
     let install_cmd = "curl -fsSL https://antigravity.google/cli/install.sh | bash".to_string();
     let login_cmd = "agy".to_string();

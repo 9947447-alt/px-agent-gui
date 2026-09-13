@@ -23,7 +23,7 @@ export default function App() {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [selectedBackend, setSelectedBackend] = useState<BackendType>('grok');
-  const [workspace, setWorkspace] = useState('/Users/a0000/Developer/px-agent-gui');
+  const [workspace, setWorkspace] = useState('');
   const [prompt, setPrompt] = useState('');
   const [isRunning, setIsRunning] = useState(false);
   const [messages, setMessages] = useState<MessageItem[]>([]);

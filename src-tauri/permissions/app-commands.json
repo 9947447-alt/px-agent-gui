@@ -1,0 +1,33 @@
+{
+  "default": {
+    "description": "Main-window commands used by the GUI",
+    "permissions": [
+      "allow-probe-status",
+      "allow-start-task",
+      "allow-respond-permission",
+      "allow-stop-session"
+    ]
+  },
+  "permission": [
+    {
+      "identifier": "allow-probe-status",
+      "description": "Allows probing grok/agy install and login status",
+      "commands": { "allow": ["probe_status"] }
+    },
+    {
+      "identifier": "allow-start-task",
+      "description": "Allows spawning one official CLI session",
+      "commands": { "allow": ["start_task"] }
+    },
+    {
+      "identifier": "allow-respond-permission",
+      "description": "Allows sending a single-shot permission decision",
+      "commands": { "allow": ["respond_permission"] }
+    },
+    {
+      "identifier": "allow-stop-session",
+      "description": "Allows stopping the active CLI session",
+      "commands": { "allow": ["stop_session"] }
+    }
+  ]
+}

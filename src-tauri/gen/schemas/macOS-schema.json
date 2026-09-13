@@ -177,6 +177,36 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Main-window commands used by the GUI\n#### This default permission set includes:\n\n- `allow-probe-status`\n- `allow-start-task`\n- `allow-respond-permission`\n- `allow-stop-session`",
+          "type": "string",
+          "const": "default",
+          "markdownDescription": "Main-window commands used by the GUI\n#### This default permission set includes:\n\n- `allow-probe-status`\n- `allow-start-task`\n- `allow-respond-permission`\n- `allow-stop-session`"
+        },
+        {
+          "description": "Allows probing grok/agy install and login status",
+          "type": "string",
+          "const": "allow-probe-status",
+          "markdownDescription": "Allows probing grok/agy install and login status"
+        },
+        {
+          "description": "Allows sending a single-shot permission decision",
+          "type": "string",
+          "const": "allow-respond-permission",
+          "markdownDescription": "Allows sending a single-shot permission decision"
+        },
+        {
+          "description": "Allows spawning one official CLI session",
+          "type": "string",
+          "const": "allow-start-task",
+          "markdownDescription": "Allows spawning one official CLI session"
+        },
+        {
+          "description": "Allows stopping the active CLI session",
+          "type": "string",
+          "const": "allow-stop-session",
+          "markdownDescription": "Allows stopping the active CLI session"
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",

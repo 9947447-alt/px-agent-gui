@@ -78,12 +78,103 @@ fn is_session_wide_allow(option_id: &str) -> bool {
     id.contains("always") || (id.contains("allow") && id.contains("session"))
 }
 
+fn is_once_option(option_id: &str) -> bool {
+    option_id == "allow-once" || option_id == "reject-once"
+}
+
+fn home_dir() -> Result<PathBuf, String> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .ok_or_else(|| "未设置 HOME / USERPROFILE".to_string())
+}
+
+fn spawn_stderr_drain(stderr: Option<tokio::process::ChildStderr>) {
+    let Some(stderr) = stderr else {
+        return;
+    };
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(stderr).lines();
+        while let Ok(Some(_)) = reader.next_line().await {}
+    });
+}
+
+fn once_only_options() -> Vec<PermissionOptionPayload> {
+    vec![
+        PermissionOptionPayload {
+            option_id: "allow-once".to_string(),
+            name: "允许执行".to_string(),
+            kind: Some("allow_once".to_string()),
+        },
+        PermissionOptionPayload {
+            option_id: "reject-once".to_string(),
+            name: "拒绝 (默认)".to_string(),
+            kind: Some("reject_once".to_string()),
+        },
+    ]
+}
+
+/// Map an agy `step_update` object to a GUI permission card.
+/// Field names come from official stream-json docs + a harmless run_command probe:
+/// `event=step_update`, `step_update.step_type=tool`, `tool_name`, `tool_info.parameters`,
+/// `tool_info.error.type/message`. Headless auto-denies Ask tools; stdin only accepts `user`.
+fn agy_permission_from_step(
+    session_id: &str,
+    step: &Value,
+) -> Option<PermissionRequestPayload> {
+    let step_type = step.get("step_type").and_then(|s| s.as_str()).unwrap_or("");
+    if step_type != "tool" {
+        return None;
+    }
+    let tool_name = step
+        .get("tool_name")
+        .and_then(|s| s.as_str())
+        .unwrap_or("tool");
+    let tool_info = step.get("tool_info").cloned().unwrap_or(Value::Null);
+    let err_msg = tool_info
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+        .unwrap_or("");
+    let is_ask_tool = tool_name == "ask_permission" || tool_name == "ask_custom_permission";
+    let is_denied = err_msg.contains("permission check failed")
+        || err_msg.contains("user denied permission");
+    if !is_ask_tool && !is_denied {
+        return None;
+    }
+    let params = tool_info.get("parameters");
+    let command = params
+        .and_then(|p| p.get("CommandLine").or_else(|| p.get("command")))
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            if err_msg.is_empty() {
+                None
+            } else {
+                Some(err_msg.to_string())
+            }
+        });
+    let title = if is_denied {
+        format!("权限被拒绝: {}", tool_name)
+    } else {
+        format!("请求权限: {}", tool_name)
+    };
+    Some(PermissionRequestPayload {
+        id: step.get("step_index").cloned().unwrap_or(Value::Null),
+        session_id: session_id.to_string(),
+        tool_name: tool_name.to_string(),
+        title,
+        command,
+        options: once_only_options(),
+    })
+}
+
 pub async fn respond_permission(
     state: &SessionState,
     request_id: Value,
     option_id: String,
 ) -> Result<(), String> {
-    if is_session_wide_allow(&option_id) {
+    if is_session_wide_allow(&option_id) || !is_once_option(&option_id) {
         return Err(format!(
             "拒绝会话级放行 optionId={}，仅允许单次 allow-once / reject-once",
             option_id
@@ -110,8 +201,13 @@ pub async fn respond_permission(
                 .map_err(|e| format!("发送权限决策失败: {}", e))?;
             return Ok(());
         }
+        if session.backend == "agy" {
+            // Official headless stream-json stdin only accepts `event: user`.
+            // Permission decision events are ignored; Ask tools are already soft-denied.
+            return Ok(());
+        }
     }
-    Err("当前无等待权限审批的 Grok 会话".to_string())
+    Err("当前无等待权限审批的会话".to_string())
 }
 
 pub async fn start_task(
@@ -124,7 +220,7 @@ pub async fn start_task(
     // 1. 终止已有会话
     stop_active_session(state).await;
 
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/a0000".to_string());
+    let home = home_dir()?.to_string_lossy().to_string();
     let session_uuid = Uuid::new_v4().to_string();
 
     let workspace_path = if workspace.trim().is_empty() {
@@ -152,6 +248,7 @@ pub async fn start_task(
             let mut child = cmd.spawn().map_err(|e| format!("启动 grok agent 失败: {}", e))?;
             let stdout = child.stdout.take().ok_or("无法捕获 stdout")?;
             let mut stdin = child.stdin.take().ok_or("无法捕获 stdin")?;
+            spawn_stderr_drain(child.stderr.take());
 
             let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<String>(32);
 
@@ -418,6 +515,7 @@ pub async fn start_task(
             let mut child = cmd.spawn().map_err(|e| format!("启动 agy 进程失败: {}", e))?;
             let stdout = child.stdout.take().ok_or("无法捕获 stdout")?;
             let mut stdin = child.stdin.take().ok_or("无法捕获 stdin")?;
+            spawn_stderr_drain(child.stderr.take());
 
             let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<String>(32);
 
@@ -512,6 +610,11 @@ pub async fn start_task(
                                             title: Some(format!("工具执行状态: {}", state)),
                                         },
                                     );
+                                    if let Some(perm) =
+                                        agy_permission_from_step(&session_id_clone, step)
+                                    {
+                                        let _ = app_clone.emit("permission_request", perm);
+                                    }
                                 }
                             }
                         } else if event == "result" {
@@ -544,5 +647,86 @@ pub async fn start_task(
             Ok(session_uuid)
         }
         _ => Err(format!("不支持的后端类型: {}", backend)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_session_wide_allow_ids() {
+        assert!(is_session_wide_allow("allow-edits-session"));
+        assert!(is_session_wide_allow("allow-always"));
+        assert!(is_session_wide_allow("allow_always"));
+        assert!(!is_session_wide_allow("allow-once"));
+        assert!(!is_session_wide_allow("reject-once"));
+        assert!(is_once_option("allow-once"));
+        assert!(is_once_option("reject-once"));
+        assert!(!is_once_option("allow-edits-session"));
+    }
+
+    #[test]
+    fn agy_denied_run_command_becomes_once_only_card() {
+        let step = json!({
+            "conversation_id": "c8e473af-14e9-4bf8-88e8-e72497e9aa94",
+            "step_index": 4,
+            "state": "ERROR",
+            "step_type": "tool",
+            "tool_name": "run_command",
+            "tool_info": {
+                "name": "run_command",
+                "parameters": {"CommandLine": "echo AGY_PERM_PROBE > /tmp/px_agy_perm_probe.txt"},
+                "error": {
+                    "type": "TOOL_ERROR",
+                    "message": "permission check failed for command \"echo AGY_PERM_PROBE\": user denied permission to run command"
+                }
+            }
+        });
+        let perm = agy_permission_from_step("sess-1", &step).expect("denied tool should emit card");
+        assert_eq!(perm.tool_name, "run_command");
+        assert_eq!(perm.command.as_deref(), Some("echo AGY_PERM_PROBE > /tmp/px_agy_perm_probe.txt"));
+        assert_eq!(
+            perm.options
+                .iter()
+                .map(|o| o.option_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["allow-once", "reject-once"]
+        );
+        assert!(perm.options.iter().all(|o| {
+            o.kind.as_deref() == Some("allow_once") || o.kind.as_deref() == Some("reject_once")
+        }));
+        assert!(!perm.options.iter().any(|o| is_session_wide_allow(&o.option_id)));
+    }
+
+    #[test]
+    fn agy_successful_tool_does_not_emit_permission_card() {
+        let step = json!({
+            "step_index": 2,
+            "state": "DONE",
+            "step_type": "tool",
+            "tool_name": "run_command",
+            "tool_info": {
+                "name": "run_command",
+                "parameters": {"CommandLine": "echo hi"},
+                "output": "hi\n"
+            }
+        });
+        assert!(agy_permission_from_step("sess-1", &step).is_none());
+    }
+
+    #[test]
+    fn agy_ask_permission_tool_emits_once_only_card() {
+        let step = json!({
+            "step_index": 3,
+            "state": "ACTIVE",
+            "step_type": "tool",
+            "tool_name": "ask_permission",
+            "tool_info": {"name": "ask_permission", "parameters": {}}
+        });
+        let perm = agy_permission_from_step("sess-1", &step).expect("ask_permission should emit card");
+        assert_eq!(perm.tool_name, "ask_permission");
+        assert_eq!(perm.options[0].option_id, "allow-once");
+        assert_eq!(perm.options[1].option_id, "reject-once");
     }
 }
