@@ -46,6 +46,7 @@ async fn stop_session(state: State<'_, SessionState>) -> Result<(), String> {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(SessionState::new())
         .invoke_handler(tauri::generate_handler![
             probe_status,

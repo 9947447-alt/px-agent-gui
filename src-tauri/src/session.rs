@@ -306,6 +306,18 @@ pub fn build_agy_args(model: Option<&str>, reasoning_effort: Option<&str>) -> Ve
     args
 }
 
+fn resolve_workspace_dir(workspace: &str) -> Result<PathBuf, String> {
+    let trimmed = workspace.trim();
+    if trimmed.is_empty() {
+        return Err("请先选择工作区".to_string());
+    }
+    let path = PathBuf::from(trimmed);
+    if !path.is_dir() {
+        return Err(format!("工作区路径不存在: {:?}", path));
+    }
+    Ok(path)
+}
+
 pub async fn start_task(
     app: AppHandle,
     state: &SessionState,
@@ -315,21 +327,13 @@ pub async fn start_task(
     model: Option<String>,
     reasoning_effort: Option<String>,
 ) -> Result<String, String> {
+    let workspace_path = resolve_workspace_dir(&workspace)?;
+
     // 1. 终止已有会话
     stop_active_session(state).await;
 
     let home = home_dir()?.to_string_lossy().to_string();
     let session_uuid = Uuid::new_v4().to_string();
-
-    let workspace_path = if workspace.trim().is_empty() {
-        PathBuf::from(&home)
-    } else {
-        PathBuf::from(workspace.trim())
-    };
-
-    if !workspace_path.exists() {
-        return Err(format!("工作区路径不存在: {:?}", workspace_path));
-    }
 
     match backend.as_str() {
         "grok" => {
@@ -729,6 +733,44 @@ pub async fn start_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_workspace_is_rejected() {
+        let err = resolve_workspace_dir("").unwrap_err();
+        assert!(err.contains("请先选择工作区"));
+        assert!(resolve_workspace_dir("   ").is_err());
+    }
+
+    #[test]
+    fn missing_or_non_dir_workspace_is_rejected() {
+        let missing = std::env::temp_dir().join(format!(
+            "px-agent-gui-missing-ws-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&missing);
+        let err = resolve_workspace_dir(missing.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("工作区路径不存在"));
+
+        let file = std::env::temp_dir().join(format!(
+            "px-agent-gui-ws-file-{}",
+            std::process::id()
+        ));
+        std::fs::write(&file, b"x").unwrap();
+        assert!(resolve_workspace_dir(file.to_str().unwrap()).is_err());
+        let _ = std::fs::remove_file(&file);
+    }
+
+    #[test]
+    fn existing_workspace_dir_is_accepted() {
+        let root = std::env::temp_dir().join(format!(
+            "px-agent-gui-ws-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let got = resolve_workspace_dir(root.to_str().unwrap()).unwrap();
+        assert_eq!(got, root);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn rejects_session_wide_allow_ids() {

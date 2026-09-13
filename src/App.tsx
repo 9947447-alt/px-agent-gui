@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { open } from '@tauri-apps/plugin-dialog';
 import { 
   Folder, 
   Send, 
@@ -20,7 +21,6 @@ import {
 } from 'lucide-react';
 import { BackendType, SystemStatus, PermissionRequest, MessageItem } from './types';
 import logoApp from '../design/logo-app-1024.png';
-import logoMark from '../design/logo-mark-1024.png';
 
 function permissionCanAllowOnce(req: PermissionRequest): boolean {
   if (req.alreadyDenied) return false;
@@ -186,6 +186,22 @@ export default function App() {
     setPendingPermission(null);
   };
 
+  const handlePickWorkspace = async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: '选择工作区',
+        defaultPath: workspace.trim() ? workspace : undefined,
+      });
+      if (typeof selected === 'string' && selected.trim()) {
+        setWorkspace(selected);
+      }
+    } catch (err: unknown) {
+      setLaunchHint(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   // Send a task
   const handleSend = async () => {
     if (!prompt.trim() || isRunning) return;
@@ -193,6 +209,19 @@ export default function App() {
     const currentCli = systemStatus?.[selectedBackend];
     if (!currentCli?.installed || !currentCli?.loggedIn) {
       alert(`当前后端 ${selectedBackend === 'grok' ? 'Grok' : 'Antigravity'} 未安装或未登录，请先在终端完成配置。`);
+      return;
+    }
+
+    if (!workspace.trim()) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: String(Date.now()),
+          role: 'system',
+          content: '[启动失败] 请先选择工作区',
+          createdAt: Date.now(),
+        },
+      ]);
       return;
     }
 
@@ -305,11 +334,10 @@ export default function App() {
       <header className="h-14 border-b border-neutral-800/80 bg-neutral-900/70 backdrop-blur px-4 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 font-semibold text-sm tracking-tight text-neutral-200">
-            {/* 标题栏小尺寸线标 */}
-            <img 
-              src={logoMark} 
-              alt="PX Mark" 
-              className="w-6 h-6 object-contain rounded drop-shadow-sm" 
+            <img
+              src={logoApp}
+              alt="PX Agent"
+              className="w-8 h-8 object-contain drop-shadow-sm"
             />
             <span>PX Agent GUI</span>
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-400 font-mono">v0.1</span>
@@ -435,17 +463,25 @@ export default function App() {
         {/* 工作区、模型选择器、推理强度控制行 */}
         <div className="px-4 py-2.5 flex flex-wrap items-center gap-4 text-xs">
           {/* 工作区 (cwd) */}
-          <div className="flex-1 min-w-[240px] flex items-center gap-2">
+          <div className="flex-1 min-w-[240px] flex items-center gap-2 min-h-[28px]">
             <Folder className="w-4 h-4 text-neutral-400 shrink-0" />
             <span className="text-neutral-400 shrink-0 font-medium">工作区:</span>
-            <input
-              type="text"
-              value={workspace}
-              onChange={(e) => setWorkspace(e.target.value)}
+            <button
+              type="button"
+              onClick={handlePickWorkspace}
               disabled={isRunning}
-              className="flex-1 bg-neutral-950/80 border border-neutral-800 rounded px-2.5 py-1 text-neutral-200 font-mono text-xs focus:outline-none focus:border-blue-500 transition disabled:opacity-50"
-              placeholder="/path/to/project/workspace"
-            />
+              className="shrink-0 px-2.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-200 font-medium transition disabled:opacity-50"
+            >
+              选择文件夹
+            </button>
+            <span
+              className={`flex-1 min-w-0 truncate font-mono text-xs ${
+                workspace ? 'text-neutral-200' : 'text-neutral-500'
+              }`}
+              title={workspace || undefined}
+            >
+              {workspace || '未选择'}
+            </span>
           </div>
 
           {/* 模型选择器（探测失败禁用并标明「未探测」） */}
@@ -508,7 +544,7 @@ export default function App() {
       </section>
 
       {/* Main Content Area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
         {/* If CLI is missing or not logged in, display official onboarding card */}
         {!isBackendReady && !loadingStatus && (
           <div className="border border-amber-500/30 bg-amber-950/20 rounded-xl p-4 text-xs space-y-3">
@@ -563,6 +599,22 @@ export default function App() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {messages.length === 0 && !isRunning && !pendingPermission && (
+          <div className="flex-1 flex flex-col items-center justify-center min-h-[240px] text-center px-6">
+            <img
+              src={logoApp}
+              alt="PX Agent"
+              className="w-28 h-28 object-contain drop-shadow-lg mb-4"
+            />
+            <p className="text-sm text-neutral-300 font-medium">PX Agent GUI</p>
+            <p className="text-xs text-neutral-500 mt-1.5 max-w-sm leading-relaxed">
+              {workspace
+                ? '工作区已就绪，输入任务开始会话'
+                : '请先选择工作区文件夹，再发送任务或打开 KayG / Antigravity'}
+            </p>
           </div>
         )}
 
@@ -715,6 +767,8 @@ export default function App() {
               placeholder={
                 !isBackendReady
                   ? '请先根据上方指引登录并就绪官方 CLI...'
+                  : !workspace.trim()
+                  ? '请先选择工作区文件夹...'
                   : `输入任务发给 ${selectedBackend === 'grok' ? 'Grok' : 'Antigravity'}... (Enter 发送, Shift+Enter 换行)`
               }
               className="w-full bg-transparent text-neutral-100 text-sm focus:outline-none resize-none placeholder:text-neutral-500 disabled:opacity-50"
@@ -732,7 +786,7 @@ export default function App() {
           ) : (
             <button
               onClick={handleSend}
-              disabled={!prompt.trim() || !isBackendReady}
+              disabled={!prompt.trim() || !isBackendReady || !workspace.trim()}
               className="h-11 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-800 disabled:text-neutral-500 text-white text-xs font-semibold flex items-center gap-1.5 transition shadow-sm disabled:cursor-not-allowed shrink-0"
             >
               <Send className="w-3.5 h-3.5" />

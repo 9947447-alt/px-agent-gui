@@ -9,6 +9,7 @@
     "allow-start-task",
     "allow-respond-permission",
     "allow-stop-session",
-    "allow-open-desktop-app"
+    "allow-open-desktop-app",
+    "dialog:allow-open"
   ]
 }
